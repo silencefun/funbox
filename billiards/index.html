@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Billiards</title>
+<style>
+  :root{
+    --radius:12px; --radius-sm:8px;
+    --border-color:rgba(255,255,255,.14);
+    --text-primary:#eef1fb; --text-secondary:#98a3c0; --text-muted:#8b93ad;
+    --bg:#07070d; --panel-bg:rgba(14,16,28,.82);
+    --bg-card:rgba(20,22,38,.72); --bg-secondary:rgba(255,255,255,.05);
+    --accent-color:#7c5cff; --accent-purple:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text-primary);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;}
+  body{display:flex;flex-direction:column;}
+  input[type=range]{accent-color:#7dd3fc;}
+  button{font:inherit;cursor:pointer;}
+  .btn-primary,.btn-secondary{
+    border-radius:8px;border:1px solid var(--border-color);padding:6px 12px;
+    background:rgba(255,255,255,.06);color:var(--text-primary);}
+  .btn-primary{background:rgba(125,211,252,.16);border-color:rgba(125,211,252,.4);}
+  .btn-primary:hover,.btn-secondary:hover{background:rgba(255,255,255,.13);}
+
+  .bl-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+ }
+  .bl-stats {
+    display: flex;
+    gap: 24px;
+ }
+  .bl-stat {
+    text-align: center;
+ }
+  .bl-stat-value {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+ }
+  .bl-stat-label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+ }
+  .bl-board-wrap {
+    position: relative;
+    width: 100%;
+    max-width: 640px;
+ }
+  #bl-canvas {
+    display: block;
+    width: 100%;
+    border-radius: var(--radius-sm);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+    touch-action: none;
+    cursor: crosshair;
+ }
+  .bl-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(5, 5, 20, 0.72);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+ }
+  .bl-overlay.hidden {
+    display: none;
+ }
+  .bl-overlay-text {
+    color: #fff;
+    font-size: 1.2rem;
+    font-weight: 600;
+    text-align: center;
+    line-height: 1.8;
+    white-space: pre-line;
+ }
+  .bl-hint {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-align: center;
+    max-width: 640px;
+ }
+</style>
+<style>bl-wrap{height:100vh!important;width:100vw!important;border-radius:0!important;}bl-wrap canvas{width:100%!important;height:100%!important;display:block;}</style>
+</head>
+<body>
+<div class="bl-wrap">
+  <div class="bl-top">
+    <button class="btn-primary" id="bl-new">New Rack</button>
+  </div>
+
+  <div class="bl-stats">
+    <div class="bl-stat">
+      <div class="bl-stat-value" id="bl-shots">0</div>
+      <div class="bl-stat-label">Shots</div>
+    </div>
+    <div class="bl-stat">
+      <div class="bl-stat-value" id="bl-potted">0 / 10</div>
+      <div class="bl-stat-label">Potted</div>
+    </div>
+    <div class="bl-stat">
+      <div class="bl-stat-value" id="bl-best">-</div>
+      <div class="bl-stat-label">Best</div>
+    </div>
+  </div>
+
+  <div class="bl-board-wrap">
+    <canvas id="bl-canvas"></canvas>
+    <div class="bl-overlay hidden" id="bl-overlay">
+      <div class="bl-overlay-text" id="bl-overlay-text"></div>
+    </div>
+  </div>
+
+  <div class="bl-hint">When balls stop, drag back from the cue ball to aim (farther = harder), release to shoot. Potting the cue ball costs one penalty shot.</div>
+</div>
+<script>
+(function() {
+    const isZh = document.documentElement.lang === 'zh';
+    const canvas = document.getElementById('bl-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const elShots = document.getElementById('bl-shots');
+    const elPotted = document.getElementById('bl-potted');
+    const elBest = document.getElementById('bl-best');
+    const elOverlay = document.getElementById('bl-overlay');
+    const elOverlayText = document.getElementById('bl-overlay-text');
+    const BEST_KEY = 'funbox-billiards-best';
+
+    const COLORS = ['#fdcb6e', '#0984e3', '#d63031', '#6c5ce7', '#e17055', '#00b894', '#e84393', '#2d3436', '#f39c12', '#16a085'];
+    const TOTAL_OBJ = 10;
+
+    let W = 620, H = 340, dpr, R, PR;
+    function setCanvasSize() {
+      const wrapEl = canvas.parentElement;
+      W = Math.min(wrapEl.clientWidth, 640);
+      H = Math.floor(W * 0.55);
+      R = Math.max(W / 62, 7);
+      PR = R * 1.9;
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = W * dpr;
+      canvas.height = H * dpr;
+      canvas.style.height = H + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+ }
+
+    const PAD = () => R * 2.4; // 库边厚度
+    function pockets() {
+      const p = PAD() * 0.75;
+      return [
+        [p, p], [W / 2, p * 0.8], [W - p, p],
+        [p, H - p], [W / 2, H - p * 0.8], [W - p, H - p]
+      ];
+ }
+
+    let balls, shots, potted, moving = false;
+    let aiming = false, aimX = 0, aimY = 0;
+    let over = false, animId = null, lastTime = 0;
+
+    function cue() { return balls.find(b => b.cue); }
+
+    function loadBest() {
+      const v = localStorage.getItem(BEST_KEY);
+      elBest.textContent = v ? v : '-';
+ }
+    function saveBest() {
+      const v = parseInt(localStorage.getItem(BEST_KEY) || '0', 10);
+      if (!v || shots < v) {
+        localStorage.setItem(BEST_KEY, String(shots));
+        elBest.textContent = shots;
+ }
+    }
+
+    function rack() {
+      balls = [];
+      // 白球
+      balls.push({ x: W * 0.25, y: H / 2, vx: 0, vy: 0, color: '#fff', cue: true, active: true });
+      // 三角阵
+      let n = 0;
+      const sx = W * 0.66, gap = R * 2.08;
+      for (let col = 0; col < 4 && n < TOTAL_OBJ; col++) {
+        for (let row = 0; row <= col && n < TOTAL_OBJ; row++) {
+          balls.push({
+            x: sx + col * gap * 0.88,
+            y: H / 2 + (row - col / 2) * gap,
+            vx: 0, vy: 0,
+            color: COLORS[n % COLORS.length],
+            num: n + 1,
+            cue: false, active: true
+          });
+          n++;
+ }
+      }
+      shots = 0;
+      potted = 0;
+      over = false;
+      moving = false;
+      aiming = false;
+      elShots.textContent = '0';
+      elPotted.textContent = '0 / ' + TOTAL_OBJ;
+      elOverlay.classList.add('hidden');
+ }
+
+    function respawnCue() {
+      const c = cue();
+      c.active = true;
+      c.vx = 0;
+      c.vy = 0;
+      c.x = W * 0.25;
+      c.y = H / 2;
+      // 避免与其他球重叠
+      let tries = 0;
+      while (tries++ < 200 && balls.some(b => b !== c && b.active && Math.hypot(b.x - c.x, b.y - c.y) < R * 2.2)) {
+        c.x = PAD() + R + Math.random() * (W - PAD() * 2 - R * 2);
+        c.y = PAD() + R + Math.random() * (H - PAD() * 2 - R * 2);
+ }
+    }
+
+    function update(dt) {
+      const fr = Math.pow(0.35, dt); // 每秒衰减到 35%
+      let anyMoving = false;
+      const pks = pockets();
+
+      for (const b of balls) {
+        if (!b.active) continue;
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        b.vx *= fr;
+        b.vy *= fr;
+        if (Math.hypot(b.vx, b.vy) < 4) { b.vx = 0; b.vy = 0; }
+        else anyMoving = true;
+
+        // 进袋
+        for (const [px, py] of pks) {
+          if (Math.hypot(b.x - px, b.y - py) < PR * 0.72) {
+            b.active = false;
+            b.vx = 0; b.vy = 0;
+            if (b.cue) {
+              shots++;
+              elShots.textContent = shots;
+              setTimeout(respawnCue, 500);
+ } else {
+              potted++;
+              elPotted.textContent = potted + ' / ' + TOTAL_OBJ;
+              if (potted >= TOTAL_OBJ) winGame();
+ }
+            break;
+ }
+        }
+        if (!b.active) continue;
+
+        // 库边反弹
+        const lo = PAD() + R, hix = W - PAD() - R, hiy = H - PAD() - R;
+        if (b.x < lo) { b.x = lo; b.vx = Math.abs(b.vx) * 0.92; }
+        if (b.x > hix) { b.x = hix; b.vx = -Math.abs(b.vx) * 0.92; }
+        if (b.y < lo) { b.y = lo; b.vy = Math.abs(b.vy) * 0.92; }
+        if (b.y > hiy) { b.y = hiy; b.vy = -Math.abs(b.vy) * 0.92; }
+      }
+
+      // 两两碰撞（等质量弹性）
+      for (let i = 0; i < balls.length; i++) {
+        const a = balls[i];
+        if (!a.active) continue;
+        for (let j = i + 1; j < balls.length; j++) {
+          const b = balls[j];
+          if (!b.active) continue;
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const d = Math.hypot(dx, dy);
+          if (d > 0 && d < R * 2) {
+            const nx = dx / d, ny = dy / d;
+            // 分离
+            const overlap = (R * 2 - d) / 2;
+            a.x -= nx * overlap; a.y -= ny * overlap;
+            b.x += nx * overlap; b.y += ny * overlap;
+            // 沿法线交换速度分量
+            const va = a.vx * nx + a.vy * ny;
+            const vb = b.vx * nx + b.vy * ny;
+            const diff = (vb - va) * 0.96;
+            a.vx += nx * diff; a.vy += ny * diff;
+            b.vx -= nx * diff; b.vy -= ny * diff;
+ }
+        }
+      }
+
+      moving = anyMoving;
+ }
+
+    function draw() {
+      // 木框
+      ctx.fillStyle = '#6d4c2f';
+      ctx.fillRect(0, 0, W, H);
+      // 台呢
+      ctx.fillStyle = '#0b6e4f';
+      const p = PAD() * 0.55;
+      ctx.fillRect(p, p, W - p * 2, H - p * 2);
+      ctx.fillStyle = '#0e7f5b';
+      ctx.fillRect(PAD(), PAD(), W - PAD() * 2, H - PAD() * 2);
+
+      // 袋口
+      ctx.fillStyle = '#08131c';
+      for (const [px, py] of pockets()) {
+        ctx.beginPath();
+        ctx.arc(px, py, PR * 0.72, 0, Math.PI * 2);
+        ctx.fill();
+ }
+
+      // 球
+      for (const b of balls) {
+        if (!b.active) continue;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, R, 0, Math.PI * 2);
+        ctx.fillStyle = b.color;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        // 高光
+        ctx.beginPath();
+        ctx.arc(b.x - R * 0.3, b.y - R * 0.3, R * 0.28, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        ctx.fill();
+        if (b.num) {
+          ctx.fillStyle = b.num === 8 ? '#fff' : 'rgba(255,255,255,0.9)';
+          ctx.font = 'bold ' + Math.floor(R * 0.9) + 'px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(b.num, b.x, b.y + 0.5);
+ }
+      }
+
+      // 瞄准线
+      const c = cue();
+      if (aiming && c && c.active) {
+        const dx = c.x - aimX, dy = c.y - aimY;
+        const len = Math.min(Math.hypot(dx, dy), 160);
+        const ang = Math.atan2(dy, dx);
+        ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+        ctx.setLineDash([6, 6]);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(c.x, c.y);
+        ctx.lineTo(c.x + Math.cos(ang) * len * 2.2, c.y + Math.sin(ang) * len * 2.2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // 球杆
+        ctx.strokeStyle = '#c8912f';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(c.x - Math.cos(ang) * (R + 6), c.y - Math.sin(ang) * (R + 6));
+        ctx.lineTo(c.x - Math.cos(ang) * (R + 6 + len), c.y - Math.sin(ang) * (R + 6 + len));
+        ctx.stroke();
+        // 力度条
+        ctx.fillStyle = 'rgba(0,0,0,0.4)';
+        ctx.fillRect(W / 2 - 70, 8, 140, 10);
+        ctx.fillStyle = len < 110 ? '#00b894' : '#e17055';
+        ctx.fillRect(W / 2 - 70, 8, 140 * (len / 160), 10);
+ }
+    }
+
+    function frame(now) {
+      animId = requestAnimationFrame(frame);
+      const dt = Math.min((now - lastTime) / 1000, 0.033);
+      lastTime = now;
+      if (!over) update(dt);
+      draw();
+ }
+
+    function winGame() {
+      over = true;
+      saveBest();
+      elOverlayText.textContent = ("Table cleared! Shots:") + shots + ("Tap for a new rack");
+      elOverlay.classList.remove('hidden');
+ }
+
+    function pos(e) {
+      const rect = canvas.getBoundingClientRect();
+      return [(e.clientX - rect.left) * (W / rect.width), (e.clientY - rect.top) * (H / rect.height)];
+ }
+
+    canvas.addEventListener('pointerdown', function(e) {
+      if (over || moving) return;
+      const c = cue();
+      if (!c || !c.active) return;
+      const [x, y] = pos(e);
+      if (Math.hypot(x - c.x, y - c.y) < R * 6) {
+        aiming = true;
+        aimX = x;
+        aimY = y;
+        canvas.setPointerCapture(e.pointerId);
+ }
+      e.preventDefault();
+ });
+    canvas.addEventListener('pointermove', function(e) {
+      if (!aiming) return;
+      const [x, y] = pos(e);
+      aimX = x;
+      aimY = y;
+ });
+    canvas.addEventListener('pointerup', function() {
+      if (!aiming) return;
+      aiming = false;
+      const c = cue();
+      const dx = c.x - aimX, dy = c.y - aimY;
+      const len = Math.min(Math.hypot(dx, dy), 160);
+      if (len < 12) return; // 太短视为取消
+      const power = len * 6.5;
+      const ang = Math.atan2(dy, dx);
+      c.vx = Math.cos(ang) * power;
+      c.vy = Math.sin(ang) * power;
+      shots++;
+      elShots.textContent = shots;
+ });
+
+    elOverlay.addEventListener('click', rack);
+    document.getElementById('bl-new').addEventListener('click', rack);
+
+    window.addEventListener('resize', function() {
+      setCanvasSize();
+      rack();
+ });
+
+    setCanvasSize();
+    loadBest();
+    rack();
+    lastTime = performance.now();
+    animId = requestAnimationFrame(frame);
+ })();
+</script>
+<script>(function(){var r=document.querySelector('.bl-wrap');if(r)r.classList.add('is-fs');})();</script>
+</body>
+</html>

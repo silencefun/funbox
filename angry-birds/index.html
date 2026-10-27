@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Angry Birds</title>
+<style>
+  :root{
+    --radius:12px; --radius-sm:8px;
+    --border-color:rgba(255,255,255,.14);
+    --text-primary:#eef1fb; --text-secondary:#98a3c0; --text-muted:#8b93ad;
+    --bg:#07070d; --panel-bg:rgba(14,16,28,.82);
+    --bg-card:rgba(20,22,38,.72); --bg-secondary:rgba(255,255,255,.05);
+    --accent-color:#7c5cff; --accent-purple:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text-primary);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;}
+  body{display:flex;flex-direction:column;}
+  input[type=range]{accent-color:#7dd3fc;}
+  button{font:inherit;cursor:pointer;}
+  .btn-primary,.btn-secondary{
+    border-radius:8px;border:1px solid var(--border-color);padding:6px 12px;
+    background:rgba(255,255,255,.06);color:var(--text-primary);}
+  .btn-primary{background:rgba(125,211,252,.16);border-color:rgba(125,211,252,.4);}
+  .btn-primary:hover,.btn-secondary:hover{background:rgba(255,255,255,.13);}
+
+  .ab-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .ab-hud { display: flex; gap: 24px; }
+  .ab-stat { text-align: center; }
+  .ab-label { display: block; font-size: 0.78rem; color: var(--text-muted); }
+  .ab-value { font-size: 1.2rem; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .ab-stage { position: relative; width: min(94vw, 480px); }
+  #ab-canvas { width: 100%; height: auto; background: linear-gradient(#8fd3f4, #c9eaf5); border: 1px solid var(--border-color); border-radius: var(--radius-sm); display: block; touch-action: none; cursor: pointer; }
+  .ab-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: rgba(10,14,26,0.66); border-radius: var(--radius-sm); }
+  .ab-overlay.hidden { display: none; }
+  .ab-otext { color: #fff; font-size: 1.4rem; font-weight: 800; text-align: center; }
+  .ab-hint { color: var(--text-muted); font-size: 0.85rem; text-align: center; max-width: 480px; }
+</style>
+<style>ab-wrap{height:100vh!important;width:100vw!important;border-radius:0!important;}ab-wrap canvas{width:100%!important;height:100%!important;display:block;}</style>
+</head>
+<body>
+<div class="ab-wrap">
+  <div class="ab-hud">
+    <div class="ab-stat"><span class="ab-label">Level</span><span class="ab-value" id="ab-level">1</span></div>
+    <div class="ab-stat"><span class="ab-label">Birds</span><span class="ab-value" id="ab-birds">3</span></div>
+    <div class="ab-stat"><span class="ab-label">Pigs</span><span class="ab-value" id="ab-pigs">0</span></div>
+  </div>
+  <div class="ab-stage">
+    <canvas id="ab-canvas" width="480" height="360"></canvas>
+    <div class="ab-overlay" id="ab-overlay">
+      <div class="ab-otext" id="ab-otext">Angry Birds</div>
+      <button class="btn-primary" id="ab-start">Start</button>
+    </div>
+  </div>
+  <div class="ab-hint">Press the bird and pull back the slingshot, release to launch. Topple the crates and squash every green pig to win. Run out of birds and you lose.</div>
+</div>
+<script>
+(function() {
+    const isZh = document.documentElement.lang === 'zh';
+    const canvas = document.getElementById('ab-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const W = 480, H = 360;
+    const levelEl = document.getElementById('ab-level');
+    const birdsEl = document.getElementById('ab-birds');
+    const pigsEl = document.getElementById('ab-pigs');
+    const overlay = document.getElementById('ab-overlay');
+    const otext = document.getElementById('ab-otext');
+
+    let dpr = Math.min(window.devicePixelRatio || 1, 2);
+    function resize() { canvas.width = W * dpr; canvas.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
+    resize();
+
+    const GROUND = H - 30, G = 900, SLING = { x: 80, y: H - 90 };
+    let level, birdsLeft, blocks, pigs, bird, state, dragging, dragPos, running;
+    // state: idle(等待拉) | flying | settling
+
+    function box(x, y, w, h) { return { x, y, w, h, vx: 0, vy: 0, ang: 0, va: 0 }; }
+    function loadLevel(n) {
+      blocks = []; pigs = [];
+      const baseX = 300 + (n % 3) * 20;
+      // 木箱结构
+      const cols = 2 + (n % 3);
+      for (let c = 0; c < cols; c++) {
+        const cx = baseX + c * 46;
+        blocks.push(box(cx, GROUND - 40, 30, 40));
+        if (c % 2 === 0) blocks.push(box(cx, GROUND - 84, 30, 40));
+ }
+      // 顶部横梁
+      blocks.push(box(baseX + 8, GROUND - 108, 30 + (cols - 1) * 46, 16));
+      // 小猪
+      const pigCount = Math.min(1 + Math.floor(n / 2), 4);
+      for (let i = 0; i < pigCount; i++) {
+        pigs.push({ x: baseX + i * 50 + 6, y: GROUND - 18, vx: 0, vy: 0, r: 15, alive: true });
+ }
+      birdsLeft = 3 + Math.floor(n / 3);
+      birdsEl.textContent = birdsLeft;
+      levelEl.textContent = n;
+      pigsEl.textContent = pigs.length;
+      resetBird();
+ }
+    function resetBird() { bird = { x: SLING.x, y: SLING.y, vx: 0, vy: 0, r: 12, launched: false }; state = 'idle'; }
+
+    function fullStart() { level = 1; loadLevel(1); overlay.classList.add('hidden'); running = true; last = performance.now(); requestAnimationFrame(loop); }
+    function aliveP() { return pigs.filter(p => p.alive).length; }
+
+    function afterShot() {
+      if (state === 'over') return;
+      state = 'over';
+      if (aliveP() === 0) { setTimeout(winLevel, 500); return; }
+      birdsLeft--; birdsEl.textContent = birdsLeft;
+      if (birdsLeft <= 0 && aliveP() > 0) { setTimeout(lose, 600); }
+      else resetBird();
+ }
+    function winLevel() { level++; if (level > 8) { running = false; otext.textContent = "All levels cleared!"; document.getElementById('ab-start').textContent = "Play Again"; overlay.classList.remove('hidden'); retry = false; } else loadLevel(level); }
+    function lose() { running = false; otext.textContent = "Out of birds… retry"; document.getElementById('ab-start').textContent = "Retry"; overlay.classList.remove('hidden'); retry = true; }
+    let retry = false;
+
+    let last = 0;
+    let stuckT = 0; let lastBirdX = 0, lastBirdY = 0;
+    function loop(t) {
+      if (!running) return;
+      let dt = (t - last) / 1000; last = t; if (dt > 0.033) dt = 0.033;
+      physics(dt); draw();
+      requestAnimationFrame(loop); }
+
+    function aabb(a, b) { return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
+
+    function physics(dt) {
+      // 小鸟
+      if (state === 'flying') {
+        bird.vy += G * dt; bird.x += bird.vx * dt; bird.y += bird.vy * dt;
+        // 地面
+        if (bird.y + bird.r > GROUND) { bird.y = GROUND - bird.r; bird.vy *= -0.35; bird.vx *= 0.7; if (Math.abs(bird.vy) < 40) bird.vy = 0; }
+        // 撞猪
+        for (const p of pigs) { if (p.alive && Math.hypot(p.x - bird.x, p.y - bird.y) < p.r + bird.r) { p.alive = false; pigsEl.textContent = aliveP(); bird.vx *= 0.6; bird.vy *= 0.6; } }
+        // 撞箱：赋予冲量
+        for (const b of blocks) {
+          const bx = { x: bird.x - bird.r, y: bird.y - bird.r, w: bird.r * 2, h: bird.r * 2 };
+          if (aabb(bx, b)) {
+            b.vx += bird.vx * 0.25; b.vy += bird.vy * 0.2; b.va += (Math.random() - 0.5) * 4;
+            bird.vx *= 0.5; bird.vy *= 0.5;
+            // 推开小鸟：判断从哪个方向撞入，沿最短穿透轴推出
+            const cxB = b.x + b.w / 2, cyB = b.y + b.h / 2;
+            const dx = bird.x - cxB, dy = bird.y - cyB;
+            const ox = (b.w / 2 + bird.r) - Math.abs(dx);
+            const oy = (b.h / 2 + bird.r) - Math.abs(dy);
+            if (ox < oy) { bird.x += dx > 0 ? ox : -ox; bird.vx = 0; }
+            else { bird.y += dy > 0 ? oy : -oy; bird.vy = 0; } }
+        }
+        // 出界或停止
+        if (bird.x > W + 40 || bird.x < -40) afterShot();
+        else if (Math.abs(bird.vx) < 12 && bird.y >= GROUND - bird.r - 1) { state = 'settling'; settleT = 0; }
+        // 卡住检测：位置几乎不变超过2秒 → 结束本次发射
+        if (Math.abs(bird.x - lastBirdX) < 1 && Math.abs(bird.y - lastBirdY) < 1) {
+          stuckT += dt;
+          if (stuckT > 2) { afterShot(); stuckT = 0; }
+        } else { stuckT = 0; }
+        lastBirdX = bird.x; lastBirdY = bird.y;
+      } else if (state === 'settling') {
+        settleT += dt; if (settleT > 0.8) afterShot(); }
+
+      // 木箱物理
+      for (const b of blocks) {
+        b.vy += G * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.ang += b.va * dt;
+        b.vx *= 0.98; b.va *= 0.96;
+        if (b.y + b.h > GROUND) { b.y = GROUND - b.h; b.vy *= -0.2; b.vx *= 0.8; b.va *= 0.5; if (Math.abs(b.vy) < 30) b.vy = 0; }
+        if (b.x < 0) { b.x = 0; b.vx *= -0.4; } if (b.x + b.w > W) { b.x = W - b.w; b.vx *= -0.4; }
+      }
+      // 箱-箱简单分离
+      for (let it = 0; it < 3; it++) {
+        for (let i = 0; i < blocks.length; i++) for (let j = i + 1; j < blocks.length; j++) {
+          const a = blocks[i], b = blocks[j];
+          if (aabb(a, b)) {
+            const ox = Math.min(a.x + a.w - b.x, b.x + b.w - a.x);
+            const oy = Math.min(a.y + a.h - b.y, b.y + b.h - a.y);
+            if (ox < oy) { const s = (a.x < b.x ? -1 : 1) * ox / 2; a.x += s; b.x -= s; a.vx += s * 0.5; b.vx -= s * 0.5; }
+            else { const s = (a.y < b.y ? -1 : 1) * oy / 2; a.y += s; b.y -= s; if (a.y < b.y) { a.vy = Math.min(a.vy, 0); } else { b.vy = Math.min(b.vy, 0); } }
+          }
+        }
+      }
+      // 猪受重力 + 被箱砸
+      for (const p of pigs) {
+        if (!p.alive) continue;
+        p.vy += G * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.98;
+        if (p.y + p.r > GROUND) { p.y = GROUND - p.r; p.vy = 0; p.vx *= 0.8; }
+        for (const b of blocks) {
+          const pb = { x: p.x - p.r, y: p.y - p.r, w: p.r * 2, h: p.r * 2 };
+          if (aabb(pb, b) && (Math.abs(b.vy) > 220 || Math.abs(b.vx) > 220)) { p.alive = false; pigsEl.textContent = aliveP(); }
+        }
+      }
+      if (state !== 'idle' && aliveP() === 0 && running) { setTimeout(winLevel, 500); running = false; }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+      // 地面
+      ctx.fillStyle = '#6ab04c'; ctx.fillRect(0, GROUND, W, H - GROUND);
+      ctx.fillStyle = '#5a9a3c'; ctx.fillRect(0, GROUND, W, 6);
+      // 弹弓
+      ctx.strokeStyle = '#7a4a1e'; ctx.lineWidth = 6; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(SLING.x, GROUND); ctx.lineTo(SLING.x, SLING.y); ctx.stroke();
+      // 橡皮筋
+      if (state === 'idle' && dragging) { ctx.strokeStyle = '#3a2410'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(SLING.x - 6, SLING.y); ctx.lineTo(bird.x, bird.y); ctx.stroke(); }
+      // 木箱
+      for (const b of blocks) {
+        ctx.save(); ctx.translate(b.x + b.w / 2, b.y + b.h / 2); ctx.rotate(b.ang);
+        ctx.fillStyle = '#c8873c'; ctx.strokeStyle = '#8a5a20'; ctx.lineWidth = 2;
+        ctx.fillRect(-b.w / 2, -b.h / 2, b.w, b.h); ctx.strokeRect(-b.w / 2, -b.h / 2, b.w, b.h);
+        ctx.strokeStyle = 'rgba(138,90,32,0.6)'; ctx.beginPath(); ctx.moveTo(-b.w / 2, -b.h / 2); ctx.lineTo(b.w / 2, b.h / 2); ctx.moveTo(b.w / 2, -b.h / 2); ctx.lineTo(-b.w / 2, b.h / 2); ctx.stroke();
+        ctx.restore();
+ }
+      // 猪
+      for (const p of pigs) { if (!p.alive) continue; ctx.fillStyle = '#5ec95e'; ctx.strokeStyle = '#3a8a3a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill(); ctx.stroke(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(p.x - 5, p.y - 4, 3, 0, 7); ctx.arc(p.x + 5, p.y - 4, 3, 0, 7); ctx.fill(); ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(p.x - 5, p.y - 4, 1.4, 0, 7); ctx.arc(p.x + 5, p.y - 4, 1.4, 0, 7); ctx.fill(); ctx.fillStyle = '#3a8a3a'; ctx.beginPath(); ctx.ellipse(p.x, p.y + 3, 4, 3, 0, 0, 7); ctx.fill(); }
+      // 小鸟
+      ctx.fillStyle = '#e63946'; ctx.strokeStyle = '#a61b28'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(bird.x, bird.y, bird.r, 0, 7); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(bird.x + 3, bird.y - 4, 3.5, 0, 7); ctx.fill(); ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(bird.x + 4, bird.y - 4, 1.6, 0, 7); ctx.fill();
+      ctx.fillStyle = '#f4a261'; ctx.beginPath(); ctx.moveTo(bird.x + bird.r, bird.y - 2); ctx.lineTo(bird.x + bird.r + 7, bird.y); ctx.lineTo(bird.x + bird.r, bird.y + 3); ctx.closePath(); ctx.fill();
+      // 拉弓轨迹预测
+      if (state === 'idle' && dragging) {
+        const vx = (SLING.x - bird.x) * 14, vy = (SLING.y - bird.y) * 14;
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        let sx = bird.x, sy = bird.y, svx = vx, svy = vy;
+        for (let i = 0; i < 18; i++) { svy += G * 0.05; sx += svx * 0.05; sy += svy * 0.05; if (i % 2 === 0) { ctx.beginPath(); ctx.arc(sx, sy, 2.5, 0, 7); ctx.fill(); } }
+      }
+    }
+
+    let settleT = 0;
+    function pos(e) { const r = canvas.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
+    canvas.addEventListener('pointerdown', (e) => { if (state !== 'idle') return; const p = pos(e); if (Math.hypot(p.x - bird.x, p.y - bird.y) < 40) dragging = true; });
+    canvas.addEventListener('pointermove', (e) => { if (!dragging) return; const p = pos(e); const dx = p.x - SLING.x, dy = p.y - SLING.y; const d = Math.hypot(dx, dy); const max = 140; const k = d > max ? max / d : 1; bird.x = SLING.x + dx * k; bird.y = SLING.y + dy * k; });
+    window.addEventListener('pointerup', () => {
+      if (!dragging) return; dragging = false;
+      const vx = (SLING.x - bird.x) * 14, vy = (SLING.y - bird.y) * 14;
+      if (Math.hypot(vx, vy) < 30) { bird.x = SLING.x; bird.y = SLING.y; return; }
+      bird.vx = vx; bird.vy = vy; state = 'flying'; bird.launched = true;
+ });
+
+    document.getElementById('ab-start').addEventListener('click', () => {
+      if (retry) { retry = false; overlay.classList.add('hidden'); loadLevel(level); running = true; last = performance.now(); requestAnimationFrame(loop); }
+      else fullStart();
+ });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) running = false; });
+
+    level = 1; loadLevel(1); running = false; draw();
+ })();
+</script>
+<script>(function(){var r=document.querySelector('.ab-wrap');if(r)r.classList.add('is-fs');})();</script>
+</body>
+</html>

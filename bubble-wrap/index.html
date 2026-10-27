@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bubble Wrap</title>
+<style>
+  :root{
+    --radius:12px; --radius-sm:8px;
+    --border-color:rgba(255,255,255,.14);
+    --text-primary:#eef1fb; --text-secondary:#98a3c0; --text-muted:#8b93ad;
+    --bg:#07070d; --panel-bg:rgba(14,16,28,.82);
+    --bg-card:rgba(20,22,38,.72); --bg-secondary:rgba(255,255,255,.05);
+    --accent-color:#7c5cff; --accent-purple:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text-primary);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;}
+  body{display:flex;flex-direction:column;}
+  input[type=range]{accent-color:#7dd3fc;}
+  button{font:inherit;cursor:pointer;}
+  .btn-primary,.btn-secondary{
+    border-radius:8px;border:1px solid var(--border-color);padding:6px 12px;
+    background:rgba(255,255,255,.06);color:var(--text-primary);}
+  .btn-primary{background:rgba(125,211,252,.16);border-color:rgba(125,211,252,.4);}
+  .btn-primary:hover,.btn-secondary:hover{background:rgba(255,255,255,.13);}
+
+.bw-wrap {
+  --accent-color: var(--accent-pink);
+  --accent-hover: #f9a8d4;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  backdrop-filter: blur(10px);
+  max-width: 480px;
+  margin: 0 auto; }
+
+.bw-header {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  margin-bottom: 1.25rem; }
+
+.bw-stat {
+  text-align: center; }
+
+.bw-stat-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--accent-color);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1; }
+
+.bw-stat-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px; }
+
+.bw-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 0.35rem;
+  margin-bottom: 1.25rem; }
+
+.bw-bubble {
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0.04) 100%);
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  position: relative;
+  transition: all 0.15s ease;
+  box-shadow: inset 0 2px 4px rgba(255,255,255,0.06), 0 2px 4px rgba(0,0,0,0.2); }
+
+.bw-bubble::before {
+  content: '';
+  position: absolute;
+  top: 18%;
+  left: 22%;
+  width: 28%;
+  height: 20%;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.18);
+  transform: rotate(-30deg); }
+
+.bw-bubble:hover:not(.bw-popped) {
+  transform: scale(1.08);
+  border-color: var(--accent-color);
+  box-shadow: inset 0 2px 4px rgba(255,255,255,0.1), 0 0 12px rgba(244,114,182,0.25); }
+
+.bw-bubble:active:not(.bw-popped) {
+  transform: scale(0.95); }
+
+.bw-bubble.bw-popped {
+  background: var(--bg-secondary);
+  border-color: rgba(255,255,255,0.06);
+  box-shadow: inset 0 2px 6px rgba(0,0,0,0.3);
+  cursor: default;
+  transform: scale(0.92); }
+
+.bw-bubble.bw-popped::before {
+  display: none; }
+
+.bw-bubble.bw-popped::after {
+  content: '';
+  position: absolute;
+  inset: 25%;
+  border-radius: 50%;
+  border: 1.5px solid rgba(244,114,182,0.35); }
+
+.bw-controls { display: flex;
+  justify-content: center; }
+  .bw-controls button { white-space: nowrap;  }
+
+@media (max-width: 480px) {
+  .bw-wrap { padding: 1rem; }
+  .bw-grid { gap: 0.25rem; }
+}
+
+.bw-grid{width:min(88vw,620px)!important;}
+.bw-bubble{background:linear-gradient(135deg,rgba(125,211,252,.38),rgba(167,139,250,.22))!important;
+  border-color:rgba(255,255,255,.3)!important;}
+
+</style>
+<style>bw-wrap{height:100vh!important;width:100vw!important;border-radius:0!important;}bw-wrap canvas{width:100%!important;height:100%!important;display:block;}</style>
+</head>
+<body>
+<div class="bw-wrap">
+  <div class="bw-header">
+    <div class="bw-stat">
+      <div class="bw-stat-value" id="bw-count">0</div>
+      <div class="bw-stat-label">Popped</div>
+    </div>
+    <div class="bw-stat">
+      <div class="bw-stat-value" id="bw-total">64</div>
+      <div class="bw-stat-label">Total</div>
+    </div>
+  </div>
+
+  <div class="bw-grid" id="bw-grid"></div>
+
+  <div class="bw-controls">
+    <button class="btn-primary" id="bw-reset">Reset</button>
+  </div>
+</div>
+<script>
+(function() {
+    const isZh = document.documentElement.lang !== 'en';
+    const ROWS = 8;
+    const COLS = 8;
+    const TOTAL = ROWS * COLS;
+
+    let poppedCount = 0;
+
+    const elGrid = document.getElementById('bw-grid');
+    const elCount = document.getElementById('bw-count');
+    const elTotal = document.getElementById('bw-total');
+    const btnReset = document.getElementById('bw-reset');
+
+    elTotal.textContent = TOTAL;
+
+    function playPopSound() {
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(600, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(120, ctx.currentTime + 0.08);
+        gain.gain.setValueAtTime(0.25, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.12); } catch (e) {}
+    }
+
+    function createGrid() {
+      elGrid.innerHTML = '';
+      poppedCount = 0;
+      elCount.textContent = '0';
+      for (let i = 0; i < TOTAL; i++) {
+        const bubble = document.createElement('div');
+        bubble.className = 'bw-bubble';
+        bubble.dataset.i = i;
+        bubble.addEventListener('click', function() {
+          if (bubble.classList.contains('bw-popped')) return;
+          bubble.classList.add('bw-popped');
+          poppedCount++;
+          elCount.textContent = poppedCount;
+          playPopSound();
+          if (poppedCount === TOTAL) {
+            setTimeout(function() {
+              alert("All popped!"); }, 150); }
+        });
+        elGrid.appendChild(bubble); }
+    }
+
+    btnReset.addEventListener('click', createGrid);
+    createGrid(); })();
+</script>
+<script>(function(){var r=document.querySelector('.bw-wrap');if(r)r.classList.add('is-fs');})();</script>
+</body>
+</html>

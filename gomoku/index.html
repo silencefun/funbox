@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gomoku</title>
+<style>
+  :root{
+    --radius:12px; --radius-sm:8px;
+    --border-color:rgba(255,255,255,.14);
+    --text-primary:#eef1fb; --text-secondary:#98a3c0; --text-muted:#8b93ad;
+    --bg:#07070d; --panel-bg:rgba(14,16,28,.82);
+    --bg-card:rgba(20,22,38,.72); --bg-secondary:rgba(255,255,255,.05);
+    --accent-color:#7c5cff; --accent-purple:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text-primary);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;}
+  body{display:flex;flex-direction:column;}
+  input[type=range]{accent-color:#7dd3fc;}
+  button{font:inherit;cursor:pointer;}
+  .btn-primary,.btn-secondary{
+    border-radius:8px;border:1px solid var(--border-color);padding:6px 12px;
+    background:rgba(255,255,255,.06);color:var(--text-primary);}
+  .btn-primary{background:rgba(125,211,252,.16);border-color:rgba(125,211,252,.4);}
+  .btn-primary:hover,.btn-secondary:hover{background:rgba(255,255,255,.13);}
+
+  .gomoku-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+ }
+  .gomoku-top {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+ }
+  .gomoku-select {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+    font-size: 0.95rem;
+    cursor: pointer;
+ }
+  .gomoku-status {
+    font-size: 1.05rem;
+    font-weight: 600;
+    min-height: 1.6em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+ }
+  .gomoku-status .gomoku-dot {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1px solid var(--border-color);
+ }
+  .gomoku-board-wrap {
+    max-width: 600px;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+ }
+  #gomoku-canvas {
+    border-radius: var(--radius-sm);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+    touch-action: manipulation;
+    cursor: pointer;
+    max-width: 100%;
+ }
+  .gomoku-hint {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-align: center;
+ }
+</style>
+<style>gomoku-wrap{height:100vh!important;width:100vw!important;border-radius:0!important;}gomoku-wrap canvas{width:100%!important;height:100%!important;display:block;}</style>
+</head>
+<body>
+<div class="gomoku-wrap">
+  <div class="gomoku-top">
+    <select id="gomoku-mode" class="gomoku-select">
+      <option value="ai" selected>vs AI</option>
+      <option value="pvp">2 Players</option>
+    </select>
+    <button class="btn-secondary" id="gomoku-undo">Undo</button>
+    <button class="btn-primary" id="gomoku-restart">Restart</button>
+  </div>
+
+  <div class="gomoku-status" id="gomoku-status"></div>
+
+  <div class="gomoku-board-wrap">
+    <canvas id="gomoku-canvas"></canvas>
+  </div>
+
+  <div class="gomoku-hint">Tap an intersection to place a stone. Five in a row wins.</div>
+</div>
+<script>
+(function() {
+    const isZh = document.documentElement.lang === 'zh';
+    const N = 15;
+    const canvas = document.getElementById('gomoku-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const elStatus = document.getElementById('gomoku-status');
+    const elMode = document.getElementById('gomoku-mode');
+    const btnUndo = document.getElementById('gomoku-undo');
+    const btnRestart = document.getElementById('gomoku-restart');
+
+    let size, cell, pad, dpr;
+    function setCanvasSize() {
+      const wrap = canvas.parentElement;
+      const avail = Math.min(wrap.clientWidth, 600);
+      size = Math.max(300, Math.floor(avail));
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = size * dpr;
+      canvas.height = size * dpr;
+      canvas.style.width = size + 'px';
+      canvas.style.height = size + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      cell = size / (N + 1);
+      pad = cell;
+ }
+
+    let board, current, moves, gameOver, mode;
+    // userMode 只在用户主动切换下拉框时改变，防止意外重置导致模式被覆盖
+    let userMode = elMode.value;
+
+    function reset() {
+      board = [];
+      for (let y = 0; y < N; y++) board.push(new Array(N).fill(0));
+      current = 1; // 1 黑 2 白
+      moves = [];
+      gameOver = false;
+      mode = userMode;
+      updateStatus();
+      draw(); }
+
+    function inB(x, y) { return x >= 0 && x < N && y >= 0 && y < N; }
+
+    function checkWin(x, y, p) {
+      const dirs = [[1, 0], [0, 1], [1, 1], [1, -1]];
+      for (const d of dirs) {
+        let cnt = 1;
+        for (let i = 1; i < 5; i++) { const nx = x + d[0] * i, ny = y + d[1] * i; if (inB(nx, ny) && board[ny][nx] === p) cnt++; else break; }
+        for (let i = 1; i < 5; i++) { const nx = x - d[0] * i, ny = y - d[1] * i; if (inB(nx, ny) && board[ny][nx] === p) cnt++; else break; }
+        if (cnt >= 5) return true;
+ }
+      return false;
+ }
+
+    // ---- 启发式 AI ----
+    function shapeScore(cnt, block) {
+      if (cnt >= 5) return 10000000;
+      if (block === 2) return 0;
+      const open = { 1: 10, 2: 100, 3: 1200, 4: 120000 };
+      const half = { 1: 1, 2: 12, 3: 130, 4: 12000 };
+      return (block === 0 ? open[cnt] : half[cnt]) || 0;
+ }
+
+    function evalPt(x, y, p) {
+      const dirs = [[1, 0], [0, 1], [1, 1], [1, -1]];
+      let total = 0;
+      for (const d of dirs) {
+        let cnt = 1, block = 0;
+        for (let i = 1; i < 6; i++) {
+          const nx = x + d[0] * i, ny = y + d[1] * i;
+          if (!inB(nx, ny)) { block++; break; }
+          const v = board[ny][nx];
+          if (v === p) cnt++;
+          else if (v === 0) break;
+          else { block++; break; }
+        }
+        for (let i = 1; i < 6; i++) {
+          const nx = x - d[0] * i, ny = y - d[1] * i;
+          if (!inB(nx, ny)) { block++; break; }
+          const v = board[ny][nx];
+          if (v === p) cnt++;
+          else if (v === 0) break;
+          else { block++; break; }
+        }
+        total += shapeScore(Math.min(cnt, 5), block);
+ }
+      return total;
+ }
+
+    function aiMove() {
+      if (moves.length === 0) return { x: 7, y: 7 };
+      let best = null, bestScore = -1;
+      for (let y = 0; y < N; y++) {
+        for (let x = 0; x < N; x++) {
+          if (board[y][x] !== 0) continue;
+          // 只考虑已有棋子附近 2 格内的空位
+          let near = false;
+          for (let dy = -2; dy <= 2 && !near; dy++) {
+            for (let dx = -2; dx <= 2 && !near; dx++) {
+              const nx = x + dx, ny = y + dy;
+              if (inB(nx, ny) && board[ny][nx] !== 0) near = true;
+ }
+          }
+          if (!near) continue;
+          const attack = evalPt(x, y, 2);
+          const defend = evalPt(x, y, 1);
+          const score = attack * 1.5 + defend + Math.random() * 5;
+          if (score > bestScore) { bestScore = score; best = { x, y }; }
+        }
+      }
+      return best;
+ }
+
+    let aiThinking = false;
+
+    function place(x, y) {
+      board[y][x] = current;
+      moves.push({ x, y, p: current });
+      if (checkWin(x, y, current)) {
+        gameOver = true;
+        draw();
+        updateStatus();
+        return;
+ }
+      if (moves.length === N * N) {
+        gameOver = true;
+        draw();
+        updateStatus(true);
+        return;
+ }
+      current = current === 1 ? 2 : 1;
+      draw();
+      updateStatus();
+
+      if (mode === 'ai' && userMode === 'ai' && current === 2 && !gameOver) {
+        aiThinking = true;
+        updateStatus();
+        setTimeout(function() {
+          const mv = aiMove();
+          aiThinking = false;
+          if (mv) place(mv.x, mv.y);
+ }, 260);
+ }
+    }
+
+    function undo() {
+      if (moves.length === 0 || aiThinking) return;
+      let steps = 1;
+      // 人机模式下悔棋回退两步（对方 + 自己）
+      if (mode === 'ai' && moves.length >= 2 && moves[moves.length - 1].p === 2) steps = 2;
+      for (let i = 0; i < steps && moves.length; i++) {
+        const m = moves.pop();
+        board[m.y][m.x] = 0;
+        current = m.p;
+ }
+      gameOver = false;
+      draw();
+      updateStatus();
+ }
+
+    function updateStatus(isDraw) {
+      let html = '';
+      if (gameOver) {
+        if (isDraw) {
+          html = "Draw!";
+ } else {
+          const winner = moves[moves.length - 1].p;
+          if (mode === 'ai') {
+            html = winner === 1 ? ("🎉 You win!") : ("AI wins, try again!");
+ } else {
+            html = (winner === 1 ? ("Black wins!") : ("White wins!"));
+ }
+        }
+      } else if (aiThinking) {
+        html = "AI thinking…";
+ } else {
+        const dot = '<span class="gomoku-dot" style="background:' + (current === 1 ? '#1a1a1a' : '#f5f5f5') + '"></span>';
+        if (mode === 'ai') {
+          html = dot + (current === 1 ? ("Your turn (Black)") : ("AI turn (White)"));
+ } else {
+          html = dot + (current === 1 ? ("Black's turn") : ("White's turn"));
+ }
+      }
+      elStatus.innerHTML = html;
+ }
+
+    function draw() {
+      // 木纹底色
+      const bg = ctx.createLinearGradient(0, 0, size, size);
+      bg.addColorStop(0, '#d9a86c');
+      bg.addColorStop(1, '#c08d52');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, size, size);
+
+      // 网格
+      ctx.strokeStyle = 'rgba(60, 35, 10, 0.75)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < N; i++) {
+        const pos = pad + i * (size - pad * 2) / (N - 1);
+        ctx.beginPath();
+        ctx.moveTo(pad, pos);
+        ctx.lineTo(size - pad, pos);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(pos, pad);
+        ctx.lineTo(pos, size - pad);
+        ctx.stroke();
+ }
+
+      // 星位
+      const stars = [3, 7, 11];
+      ctx.fillStyle = 'rgba(60, 35, 10, 0.85)';
+      for (const sy of stars) {
+        for (const sx of stars) {
+          const px = pad + sx * (size - pad * 2) / (N - 1);
+          const py = pad + sy * (size - pad * 2) / (N - 1);
+          ctx.beginPath();
+          ctx.arc(px, py, 3, 0, Math.PI * 2);
+          ctx.fill();
+ }
+      }
+
+      // 棋子
+      const r = (size - pad * 2) / (N - 1) * 0.42;
+      for (let y = 0; y < N; y++) {
+        for (let x = 0; x < N; x++) {
+          const v = board[y][x];
+          if (!v) continue;
+          const px = pad + x * (size - pad * 2) / (N - 1);
+          const py = pad + y * (size - pad * 2) / (N - 1);
+          const g = ctx.createRadialGradient(px - r * 0.35, py - r * 0.35, r * 0.1, px, py, r);
+          if (v === 1) {
+            g.addColorStop(0, '#555');
+            g.addColorStop(1, '#0a0a0a');
+ } else {
+            g.addColorStop(0, '#ffffff');
+            g.addColorStop(1, '#c9c9c9');
+ }
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(px, py, r, 0, Math.PI * 2);
+          ctx.fill();
+ }
+      }
+
+      // 最后一手标记
+      if (moves.length) {
+        const m = moves[moves.length - 1];
+        const px = pad + m.x * (size - pad * 2) / (N - 1);
+        const py = pad + m.y * (size - pad * 2) / (N - 1);
+        ctx.fillStyle = '#e74c3c';
+        ctx.beginPath();
+        ctx.arc(px, py, 4, 0, Math.PI * 2);
+        ctx.fill();
+ }
+    }
+
+    canvas.addEventListener('click', function(e) {
+      if (gameOver || aiThinking) return;
+      if (mode === 'ai' && current === 2) return;
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const step = (size - pad * 2) / (N - 1);
+      const x = Math.round((mx - pad) / step);
+      const y = Math.round((my - pad) / step);
+      if (!inB(x, y)) return;
+      // 点击需靠近交叉点
+      const px = pad + x * step, py = pad + y * step;
+      if (Math.abs(mx - px) > step * 0.45 || Math.abs(my - py) > step * 0.45) return;
+      if (board[y][x] !== 0) return;
+      place(x, y);
+ });
+
+    elMode.addEventListener('change', function() {
+      userMode = elMode.value;
+      reset();
+    });
+    btnRestart.addEventListener('click', reset);
+    btnUndo.addEventListener('click', undo);
+
+    window.addEventListener('resize', function() {
+      setCanvasSize();
+      draw();
+ });
+
+    setCanvasSize();
+    reset();
+ })();
+</script>
+<script>(function(){var r=document.querySelector('.gomoku-wrap');if(r)r.classList.add('is-fs');})();</script>
+</body>
+</html>

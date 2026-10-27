@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rubik's Cube</title>
+<style>
+  :root{
+    --radius:12px; --radius-sm:8px;
+    --border-color:rgba(255,255,255,.14);
+    --text-primary:#eef1fb; --text-secondary:#98a3c0; --text-muted:#8b93ad;
+    --bg:#07070d; --panel-bg:rgba(14,16,28,.82);
+    --bg-card:rgba(20,22,38,.72); --bg-secondary:rgba(255,255,255,.05);
+    --accent-color:#7c5cff; --accent-purple:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text-primary);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;}
+  body{display:flex;flex-direction:column;}
+  input[type=range]{accent-color:#7dd3fc;}
+  button{font:inherit;cursor:pointer;}
+  .btn-primary,.btn-secondary{
+    border-radius:8px;border:1px solid var(--border-color);padding:6px 12px;
+    background:rgba(255,255,255,.06);color:var(--text-primary);}
+  .btn-primary{background:rgba(125,211,252,.16);border-color:rgba(125,211,252,.4);}
+  .btn-primary:hover,.btn-secondary:hover{background:rgba(255,255,255,.13);}
+
+  .rc-wrap { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .rc-hud { display: flex; align-items: center; gap: 20px; }
+  .rc-stat { text-align: center; }
+  .rc-label { display: block; font-size: 0.78rem; color: var(--text-muted); }
+  .rc-value { font-size: 1.2rem; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .rc-status { font-weight: 600; color: var(--text-primary); }
+  .rc-scene { width: 300px; height: 300px; perspective: 900px; touch-action: none; cursor: grab; user-select: none; }
+  .rc-scene:active { cursor: grabbing; }
+  .rc-orbit { width: 100%; height: 100%; position: relative; transform-style: preserve-3d; transition: transform 0.05s linear; }
+  .rc-cubie { position: absolute; width: 60px; height: 60px; left: 120px; top: 120px; transform-style: preserve-3d; }
+  .rc-face { position: absolute; width: 60px; height: 60px; border-radius: 8px; border: 2px solid #0b0f1a; box-sizing: border-box; box-shadow: inset 0 0 6px rgba(0,0,0,0.4); background: #14181f; }
+  .rc-moves { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; max-width: 340px; }
+  .rc-mv { padding: 8px 0; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); border-radius: var(--radius-sm); font-weight: 700; cursor: pointer; font-family: monospace; }
+  .rc-mv:hover { border-color: #6d5efc; color: #6d5efc; }
+  .rc-actions { display: flex; gap: 10px; }
+  .rc-hint { color: var(--text-muted); font-size: 0.85rem; text-align: center; max-width: 460px; }
+</style>
+<style>rc-wrap{height:100vh!important;width:100vw!important;border-radius:0!important;}rc-wrap canvas{width:100%!important;height:100%!important;display:block;}</style>
+</head>
+<body>
+<div class="rc-wrap">
+  <div class="rc-hud">
+    <div class="rc-stat"><span class="rc-label">Moves</span><span class="rc-value" id="rc-moves">0</span></div>
+    <div class="rc-status" id="rc-status">Drag to orbit</div>
+  </div>
+  <div class="rc-scene" id="rc-scene">
+    <div class="rc-orbit" id="rc-orbit"></div>
+  </div>
+  <div class="rc-moves">
+    <button class="rc-mv" data-move="U">U</button>
+    <button class="rc-mv" data-move="U'">U'</button>
+    <button class="rc-mv" data-move="D">D</button>
+    <button class="rc-mv" data-move="D'">D'</button>
+    <button class="rc-mv" data-move="L">L</button>
+    <button class="rc-mv" data-move="L'">L'</button>
+    <button class="rc-mv" data-move="R">R</button>
+    <button class="rc-mv" data-move="R'">R'</button>
+    <button class="rc-mv" data-move="F">F</button>
+    <button class="rc-mv" data-move="F'">F'</button>
+    <button class="rc-mv" data-move="B">B</button>
+    <button class="rc-mv" data-move="B'">B'</button>
+  </div>
+  <div class="rc-actions">
+    <button class="btn-primary" id="rc-scramble">Scramble</button>
+    <button class="btn-secondary" id="rc-reset">Reset</button>
+  </div>
+  <div class="rc-hint">Drag the cube to orbit. Tap U/D/L/R/F/B to turn a face (′ = counter-clockwise). Scramble, then try to solve it!</div>
+</div>
+<script>
+(function() {
+    const isZh = document.documentElement.lang === 'zh';
+    const scene = document.getElementById('rc-scene');
+    const orbit = document.getElementById('rc-orbit');
+    if (!orbit) return;
+    const counterEl = document.getElementById('rc-moves');
+    const statusEl = document.getElementById('rc-status');
+    const S = 62; // 单元格间距
+    const H = 30; // 半边长
+    const COLORS = {
+      xp: '#ff4d4d', xn: '#ff8c1a', // 右红 左橙
+      yn: '#ffffff', yp: '#ffd400', // 上白 下黄
+      zp: '#22c55e', zn: '#2f6bff'  // 前绿 后蓝
+    };
+    let moveCounter = 0;
+
+    // 视角
+    let rotX = -28, rotY = -36;
+    function applyOrbit() { orbit.style.transform = 'translateZ(-30px) rotateX(' + rotX + 'deg) rotateY(' + rotY + 'deg)'; }
+    applyOrbit();
+
+    const cubies = [];
+
+    function faceEl(kind, color) {
+      const f = document.createElement('div');
+      f.className = 'rc-face';
+      f.style.background = color;
+      let tf = '';
+      if (kind === 'zp') tf = 'translateZ(' + H + 'px)';
+      else if (kind === 'zn') tf = 'rotateY(180deg) translateZ(' + H + 'px)';
+      else if (kind === 'xp') tf = 'rotateY(90deg) translateZ(' + H + 'px)';
+      else if (kind === 'xn') tf = 'rotateY(-90deg) translateZ(' + H + 'px)';
+      else if (kind === 'yn') tf = 'rotateX(90deg) translateZ(' + H + 'px)';
+      else if (kind === 'yp') tf = 'rotateX(-90deg) translateZ(' + H + 'px)';
+      f.style.transform = tf;
+      return f;
+ }
+
+    function build() {
+      orbit.querySelectorAll('.rc-cubie').forEach(c => c.remove());
+      cubies.length = 0;
+      for (let x = -1; x <= 1; x++)
+        for (let y = -1; y <= 1; y++)
+          for (let z = -1; z <= 1; z++) {
+            const el = document.createElement('div');
+            el.className = 'rc-cubie';
+            // 六个面：外露面着色，内面深色
+            el.appendChild(faceEl('xp', x === 1 ? COLORS.xp : '#14181f'));
+            el.appendChild(faceEl('xn', x === -1 ? COLORS.xn : '#14181f'));
+            el.appendChild(faceEl('yp', y === 1 ? COLORS.yp : '#14181f'));
+            el.appendChild(faceEl('yn', y === -1 ? COLORS.yn : '#14181f'));
+            el.appendChild(faceEl('zp', z === 1 ? COLORS.zp : '#14181f'));
+            el.appendChild(faceEl('zn', z === -1 ? COLORS.zn : '#14181f'));
+            const mat = new DOMMatrix().translate(x * S, y * S, z * S);
+            el.style.transform = mat.toString();
+            orbit.appendChild(el);
+            cubies.push({ el, x, y, z, mat });
+ }
+    }
+
+    // 面定义：轴向量 + 层选择 + 方向
+    const AXIS = {
+      U: { sel: c => c.y === -1, ax: 0, ay: 1, az: 0, sign: -1 },
+      D: { sel: c => c.y === 1, ax: 0, ay: 1, az: 0, sign: 1 },
+      R: { sel: c => c.x === 1, ax: 1, ay: 0, az: 0, sign: -1 },
+      L: { sel: c => c.x === -1, ax: 1, ay: 0, az: 0, sign: 1 },
+      F: { sel: c => c.z === 1, ax: 0, ay: 0, az: 1, sign: -1 },
+      B: { sel: c => c.z === -1, ax: 0, ay: 0, az: 1, sign: 1 }
+    };
+
+    let busy = false;
+    const queue = [];
+
+    function enqueue(move, silent) {
+      queue.push({ move, silent });
+      if (!busy) runNext();
+ }
+
+    function enqueueFn(fn) {
+      queue.push({ fn });
+      if (!busy) runNext();
+ }
+
+    function runNext() {
+      if (!queue.length) { busy = false; return; }
+      busy = true;
+      const item = queue.shift();
+      if (item.fn) { item.fn(); runNext(); return; }
+      turn(item.move, item.silent, runNext);
+ }
+
+    function turn(move, silent, done) {
+      const face = move[0];
+      const prime = move.length > 1;
+      const def = AXIS[face];
+      if (!def) { done(); return; }
+      const angle = 90 * def.sign * (prime ? -1 : 1);
+      const affected = cubies.filter(def.sel);
+      const group = document.createElement('div');
+      group.className = 'rc-group';
+      group.style.position = 'absolute';
+      group.style.left = '120px';
+      group.style.top = '120px';
+      group.style.width = '60px';
+      group.style.height = '60px';
+      group.style.transformStyle = 'preserve-3d';
+      group.style.transform = 'none';
+      orbit.appendChild(group);
+      affected.forEach(c => group.appendChild(c.el));
+      const R = new DOMMatrix().rotateAxisAngle(def.ax, def.ay, def.az, angle);
+      // 强制重排后再加过渡
+      void group.offsetWidth;
+      const dur = silent ? 90 : 220;
+      group.style.transition = 'transform ' + dur + 'ms ease-in-out';
+      group.style.transform = R.toString();
+
+      const finish = () => {
+        affected.forEach(c => {
+          const nm = R.multiply(c.mat);
+          c.el.style.transition = 'none';
+          c.el.style.transform = nm.toString();
+          orbit.appendChild(c.el);
+          c.mat = nm;
+          const p = R.transformPoint(new DOMPoint(c.x, c.y, c.z));
+          c.x = Math.round(p.x); c.y = Math.round(p.y); c.z = Math.round(p.z);
+ });
+        group.remove();
+        if (!silent) { moveCounter++; counterEl.textContent = moveCounter; checkSolved(); }
+        done();
+ };
+      setTimeout(finish, dur + 20);
+ }
+
+    function isIdentity(m) {
+      return m.m11 > 0.98 && m.m22 > 0.98 && m.m33 > 0.98;
+ }
+
+    function checkSolved() {
+      const solved = cubies.every(c => isIdentity(c.mat));
+      if (solved && moveCounter > 0) {
+        statusEl.textContent = "🎉 Solved!";
+ }
+    }
+
+    function scramble() {
+      const faces = ['U', 'D', 'L', 'R', 'F', 'B'];
+      statusEl.textContent = "Scrambling…";
+      for (let i = 0; i < 20; i++) {
+        const f = faces[Math.floor(Math.random() * 6)];
+        const p = Math.random() < 0.5 ? '' : "'";
+        enqueue(f + p, true);
+ }
+      enqueueFn(() => {
+        moveCounter = 0; counterEl.textContent = 0;
+        statusEl.textContent = "Now solve it!";
+ });
+ }
+
+    function reset() {
+      queue.length = 0; busy = false;
+      build();
+      moveCounter = 0; counterEl.textContent = 0;
+      statusEl.textContent = "Drag to orbit";
+ }
+
+    // 按钮
+    document.querySelectorAll('.rc-mv').forEach(b => {
+      b.addEventListener('click', () => enqueue(b.getAttribute('data-move'), false));
+ });
+    document.getElementById('rc-scramble').addEventListener('click', scramble);
+    document.getElementById('rc-reset').addEventListener('click', reset);
+
+    // 拖动视角
+    let dragging = false, lx = 0, ly = 0;
+    scene.addEventListener('pointerdown', e => { dragging = true; lx = e.clientX; ly = e.clientY; scene.setPointerCapture(e.pointerId); });
+    scene.addEventListener('pointermove', e => {
+      if (!dragging) return;
+      rotY += (e.clientX - lx) * 0.5;
+      rotX -= (e.clientY - ly) * 0.5;
+      rotX = Math.max(-89, Math.min(89, rotX));
+      lx = e.clientX; ly = e.clientY;
+      applyOrbit();
+ });
+    scene.addEventListener('pointerup', () => { dragging = false; });
+    scene.addEventListener('pointercancel', () => { dragging = false; });
+
+    build();
+ })();
+</script>
+<script>(function(){var r=document.querySelector('.rc-wrap');if(r)r.classList.add('is-fs');})();</script>
+</body>
+</html>

@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Watermelon Merge</title>
+<style>
+  :root{
+    --radius:12px; --radius-sm:8px;
+    --border-color:rgba(255,255,255,.14);
+    --text-primary:#eef1fb; --text-secondary:#98a3c0; --text-muted:#8b93ad;
+    --bg:#07070d; --panel-bg:rgba(14,16,28,.82);
+    --bg-card:rgba(20,22,38,.72); --bg-secondary:rgba(255,255,255,.05);
+    --accent-color:#7c5cff; --accent-purple:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text-primary);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;}
+  body{display:flex;flex-direction:column;}
+  input[type=range]{accent-color:#7dd3fc;}
+  button{font:inherit;cursor:pointer;}
+  .btn-primary,.btn-secondary{
+    border-radius:8px;border:1px solid var(--border-color);padding:6px 12px;
+    background:rgba(255,255,255,.06);color:var(--text-primary);}
+  .btn-primary{background:rgba(125,211,252,.16);border-color:rgba(125,211,252,.4);}
+  .btn-primary:hover,.btn-secondary:hover{background:rgba(255,255,255,.13);}
+
+  .wm-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+ }
+  .wm-stats {
+    display: flex;
+    gap: 24px;
+ }
+  .wm-stat {
+    text-align: center;
+ }
+  .wm-stat-value {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+ }
+  .wm-stat-label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+ }
+  .wm-board {
+    position: relative;
+    width: min(94vw, 380px);
+ }
+  #wm-canvas {
+    display: block;
+    width: 100%;
+    background: #101431;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    touch-action: none;
+    cursor: crosshair;
+ }
+  .wm-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(5, 5, 20, 0.82);
+    border-radius: var(--radius-sm);
+    z-index: 5;
+ }
+  .wm-overlay.hidden {
+    display: none;
+ }
+  .wm-overlay-inner {
+    text-align: center;
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
+    white-space: pre-line;
+ }
+  .wm-overlay-title {
+    font-size: 3rem;
+ }
+  .wm-hint {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-align: center;
+    max-width: 480px;
+ }
+</style>
+<style>wm-wrap{height:100vh!important;width:100vw!important;border-radius:0!important;}wm-wrap canvas{width:100%!important;height:100%!important;display:block;}</style>
+</head>
+<body>
+<div class="wm-wrap">
+  <div class="wm-stats">
+    <div class="wm-stat">
+      <div class="wm-stat-value" id="wm-score">0</div>
+      <div class="wm-stat-label">Score</div>
+    </div>
+    <div class="wm-stat">
+      <div class="wm-stat-value" id="wm-next">🍒</div>
+      <div class="wm-stat-label">Next</div>
+    </div>
+    <div class="wm-stat">
+      <div class="wm-stat-value" id="wm-best">0</div>
+      <div class="wm-stat-label">Best</div>
+    </div>
+  </div>
+
+  <div class="wm-board">
+    <canvas id="wm-canvas"></canvas>
+    <div class="wm-overlay hidden" id="wm-overlay">
+      <div class="wm-overlay-inner">
+        <div class="wm-overlay-title" id="wm-overlay-title">🍉</div>
+        <div id="wm-overlay-text"></div>
+        <button class="btn-primary" id="wm-again">Play Again</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="wm-hint">Move to aim, click or release to drop. Two identical fruits merge into a bigger one - reach the 🍉 watermelon! Stacking above the red line ends the game.</div>
+</div>
+<script>
+(function() {
+    const isZh = document.documentElement.lang === 'zh';
+    const canvas = document.getElementById('wm-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const elScore = document.getElementById('wm-score');
+    const elNext = document.getElementById('wm-next');
+    const elBest = document.getElementById('wm-best');
+    const elOverlay = document.getElementById('wm-overlay');
+    const elOverlayTitle = document.getElementById('wm-overlay-title');
+    const elOverlayText = document.getElementById('wm-overlay-text');
+    const BEST_KEY = 'funbox-watermelon-merge-best';
+
+    const W = 360, H = 540, TOP = 90;
+    // 11 级水果：半径与表情
+    const FRUITS = [
+      { r: 13, e: '🍒' }, { r: 17, e: '🍓' }, { r: 22, e: '🍇' },
+      { r: 27, e: '🍊' }, { r: 33, e: '🍎' }, { r: 39, e: '🍐' },
+      { r: 46, e: '🍑' }, { r: 54, e: '🍍' }, { r: 63, e: '🍈' },
+      { r: 73, e: '🥥' }, { r: 84, e: '🍉' }
+    ];
+    const GRAV = 1500;
+
+    let dpr = 1, raf = 0, last = 0, running = true;
+    let balls, score = 0, best = 0, over = false;
+    let curType, nextType, aimX = W / 2, canDrop = true, dangerT = 0, gotMelon = false;
+
+    function resize() {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = W * dpr;
+      canvas.height = H * dpr;
+      canvas.style.aspectRatio = W + '/' + H;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+ }
+
+    function loadBest() {
+      best = parseInt(localStorage.getItem(BEST_KEY) || '0', 10) || 0;
+      elBest.textContent = best;
+ }
+    function saveBest() {
+      if (score > best) {
+        best = score;
+        localStorage.setItem(BEST_KEY, String(best));
+        elBest.textContent = best;
+ }
+    }
+
+    function randType() {
+      return Math.floor(Math.random() * 5);
+ }
+
+    function reset() {
+      balls = [];
+      score = 0;
+      over = false;
+      gotMelon = false;
+      dangerT = 0;
+      curType = randType();
+      nextType = randType();
+      canDrop = true;
+      elScore.textContent = 0;
+      elNext.textContent = FRUITS[nextType].e;
+      elOverlay.classList.add('hidden');
+ }
+
+    function drop() {
+      if (!canDrop || over) return;
+      const r = FRUITS[curType].r;
+      const x = Math.max(r + 4, Math.min(W - r - 4, aimX));
+      balls.push({ x: x, y: TOP - r - 4, vx: 0, vy: 60, type: curType, merged: false });
+      curType = nextType;
+      nextType = randType();
+      elNext.textContent = FRUITS[nextType].e;
+      canDrop = false;
+      setTimeout(function() { canDrop = true; }, 450);
+ }
+
+    function endGame() {
+      over = true;
+      saveBest();
+      elOverlayTitle.textContent = gotMelon ? '🏆' : '🍉';
+      elOverlayText.textContent = ("Game Over Score") + score + (gotMelon ? ("You made the watermelon!") : '');
+      elOverlay.classList.remove('hidden');
+ }
+
+    function update(dt) {
+      if (over) return;
+      const fr = Math.pow(0.25, dt);
+
+      balls.forEach(b => {
+        b.vy += GRAV * dt;
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        const r = FRUITS[b.type].r;
+        // 墙壁
+        if (b.x - r < 0) { b.x = r; b.vx = -b.vx * 0.4; }
+        if (b.x + r > W) { b.x = W - r; b.vx = -b.vx * 0.4; }
+        if (b.y + r > H) { b.y = H - r; b.vy = -b.vy * 0.25; b.vx *= fr; if (Math.abs(b.vy) < 40) b.vy = 0; }
+      });
+
+      // 两两碰撞：合成或分离
+      for (let i = 0; i < balls.length; i++) {
+        for (let j = i + 1; j < balls.length; j++) {
+          const a = balls[i], b = balls[j];
+          if (a.dead || b.dead) continue;
+          const ra = FRUITS[a.type].r, rb = FRUITS[b.type].r;
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const dist = Math.hypot(dx, dy) || 0.01;
+          const minD = ra + rb;
+          if (dist < minD) {
+            if (a.type === b.type && a.type < FRUITS.length - 1) {
+              // 合成
+              const t = a.type + 1;
+              a.x = (a.x + b.x) / 2;
+              a.y = (a.y + b.y) / 2;
+              a.type = t;
+              a.vy = -120;
+              a.vx = 0;
+              b.dead = true;
+              score += t * 10;
+              elScore.textContent = score;
+              if (t === FRUITS.length - 1 && !gotMelon) {
+                gotMelon = true;
+                score += 500;
+                elScore.textContent = score;
+ }
+            } else {
+              // 推开 + 速度交换（法线方向）
+              const nx = dx / dist, ny = dy / dist;
+              const overlap = (minD - dist) / 2;
+              const ma = ra * ra, mb = rb * rb;
+              const total = ma + mb;
+              a.x -= nx * overlap * (mb / total) * 2;
+              a.y -= ny * overlap * (mb / total) * 2;
+              b.x += nx * overlap * (ma / total) * 2;
+              b.y += ny * overlap * (ma / total) * 2;
+              const van = a.vx * nx + a.vy * ny;
+              const vbn = b.vx * nx + b.vy * ny;
+              if (van - vbn > 0) {
+                const impulse = (2 * (van - vbn)) / total * 0.75;
+                a.vx -= impulse * mb * nx;
+                a.vy -= impulse * mb * ny;
+                b.vx += impulse * ma * nx;
+                b.vy += impulse * ma * ny;
+ }
+            }
+          }
+        }
+      }
+      balls = balls.filter(b => !b.dead);
+
+      // 越线判定：静止球超过红线持续 1.5 秒
+      let danger = false;
+      balls.forEach(b => {
+        const r = FRUITS[b.type].r;
+        if (b.y - r < TOP && Math.abs(b.vy) < 50 && b.vy >= 0) danger = true;
+ });
+      dangerT = danger ? dangerT + dt : 0;
+      if (dangerT > 1.5) endGame();
+ }
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+      // 红线
+      ctx.strokeStyle = dangerT > 0 ? '#ff4d4f' : 'rgba(255,77,79,0.4)';
+      ctx.setLineDash([8, 6]);
+      ctx.beginPath();
+      ctx.moveTo(0, TOP);
+      ctx.lineTo(W, TOP);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // 水果
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      balls.forEach(b => {
+        const r = FRUITS[b.type].r;
+        ctx.font = (r * 1.9) + 'px serif';
+        ctx.fillText(FRUITS[b.type].e, b.x, b.y + r * 0.08);
+ });
+      // 待投放水果 + 瞄准线
+      if (!over && canDrop) {
+        const r = FRUITS[curType].r;
+        const x = Math.max(r + 4, Math.min(W - r - 4, aimX));
+        ctx.globalAlpha = 0.85;
+        ctx.font = (r * 1.9) + 'px serif';
+        ctx.fillText(FRUITS[curType].e, x, TOP - r - 4);
+        ctx.globalAlpha = 0.25;
+        ctx.strokeStyle = '#fff';
+        ctx.beginPath();
+        ctx.moveTo(x, TOP);
+        ctx.lineTo(x, H);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+ }
+    }
+
+    function loop(t) {
+      if (!running) return;
+      const dt = Math.min((t - last) / 1000, 0.033);
+      last = t;
+      // 物理分两步提升稳定性
+      update(dt / 2);
+      update(dt / 2);
+      draw();
+      raf = requestAnimationFrame(loop);
+ }
+
+    function ptrX(e) {
+      const rect = canvas.getBoundingClientRect();
+      const p = e.touches ? e.touches[0] : e;
+      return (p.clientX - rect.left) / rect.width * W;
+ }
+    canvas.addEventListener('mousemove', function(e) { aimX = ptrX(e); });
+    canvas.addEventListener('click', function(e) { aimX = ptrX(e); drop(); });
+    canvas.addEventListener('touchstart', function(e) { aimX = ptrX(e); e.preventDefault(); }, { passive: false });
+    canvas.addEventListener('touchmove', function(e) { aimX = ptrX(e); e.preventDefault(); }, { passive: false });
+    canvas.addEventListener('touchend', function(e) { drop(); e.preventDefault(); }, { passive: false });
+
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        running = false;
+        cancelAnimationFrame(raf);
+ } else {
+        running = true;
+        last = performance.now();
+        raf = requestAnimationFrame(loop);
+ }
+    });
+
+    document.getElementById('wm-again').addEventListener('click', reset);
+    window.addEventListener('resize', resize);
+    resize();
+    loadBest();
+    reset();
+    last = performance.now();
+    raf = requestAnimationFrame(loop);
+ })();
+</script>
+<script>(function(){var r=document.querySelector('.wm-wrap');if(r)r.classList.add('is-fs');})();</script>
+</body>
+</html>

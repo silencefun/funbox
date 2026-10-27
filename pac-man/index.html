@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pac-Man</title>
+<style>
+  :root{
+    --radius:12px; --radius-sm:8px;
+    --border-color:rgba(255,255,255,.14);
+    --text-primary:#eef1fb; --text-secondary:#98a3c0; --text-muted:#8b93ad;
+    --bg:#07070d; --panel-bg:rgba(14,16,28,.82);
+    --bg-card:rgba(20,22,38,.72); --bg-secondary:rgba(255,255,255,.05);
+    --accent-color:#7c5cff; --accent-purple:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text-primary);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;}
+  body{display:flex;flex-direction:column;}
+  input[type=range]{accent-color:#7dd3fc;}
+  button{font:inherit;cursor:pointer;}
+  .btn-primary,.btn-secondary{
+    border-radius:8px;border:1px solid var(--border-color);padding:6px 12px;
+    background:rgba(255,255,255,.06);color:var(--text-primary);}
+  .btn-primary{background:rgba(125,211,252,.16);border-color:rgba(125,211,252,.4);}
+  .btn-primary:hover,.btn-secondary:hover{background:rgba(255,255,255,.13);}
+
+  .pm-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .pm-hud { display: flex; gap: 22px; }
+  .pm-stat { text-align: center; }
+  .pm-label { display: block; font-size: 0.78rem; color: var(--text-muted); }
+  .pm-value { font-size: 1.2rem; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .pm-stage { position: relative; }
+  #pm-canvas { display: block; background: #000; border: 1px solid var(--border-color); border-radius: var(--radius-sm); touch-action: none; }
+  .pm-overlay { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.72); display: flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); }
+  .pm-overlay.hidden { display: none; }
+  .pm-overlay-inner { text-align: center; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+  .pm-overlay-title { font-size: 2.4rem; }
+  .pm-overlay-text { color: #fff; font-weight: 600; white-space: pre-line; }
+  .pm-hint { color: var(--text-muted); font-size: 0.85rem; text-align: center; max-width: 460px; }
+</style>
+<style>pm-wrap{height:100vh!important;width:100vw!important;border-radius:0!important;}pm-wrap canvas{width:100%!important;height:100%!important;display:block;}</style>
+</head>
+<body>
+<div class="pm-wrap">
+  <div class="pm-hud">
+    <div class="pm-stat"><span class="pm-label">Score</span><span class="pm-value" id="pm-score">0</span></div>
+    <div class="pm-stat"><span class="pm-label">Best</span><span class="pm-value" id="pm-best">0</span></div>
+    <div class="pm-stat"><span class="pm-label">Lives</span><span class="pm-value" id="pm-lives">3</span></div>
+    <div class="pm-stat"><span class="pm-label">Level</span><span class="pm-value" id="pm-level">1</span></div>
+  </div>
+  <div class="pm-stage">
+    <canvas id="pm-canvas"></canvas>
+    <div class="pm-overlay" id="pm-overlay">
+      <div class="pm-overlay-inner">
+        <div class="pm-overlay-title" id="pm-overlay-title">👻</div>
+        <div class="pm-overlay-text" id="pm-overlay-text"></div>
+        <button class="btn-primary" id="pm-start">Start</button>
+      </div>
+    </div>
+  </div>
+  <div class="pm-hint">Arrow keys / WASD to move, swipe on touch. Clear all dots to win; power pellets let you eat ghosts.</div>
+</div>
+<script>
+(function() {
+    const isZh = document.documentElement.lang === 'zh';
+    const cv = document.getElementById('pm-canvas');
+    if (!cv) return;
+    const ctx = cv.getContext('2d');
+    const elScore = document.getElementById('pm-score');
+    const elBest = document.getElementById('pm-best');
+    const elLives = document.getElementById('pm-lives');
+    const elLevel = document.getElementById('pm-level');
+    const overlay = document.getElementById('pm-overlay');
+    const ovTitle = document.getElementById('pm-overlay-title');
+    const ovText = document.getElementById('pm-overlay-text');
+    const BEST_KEY = 'funbox-pac-man-best';
+
+    const MAP = [
+      '###################',
+      '#........#........#',
+      '#o##.##..#..##.##o#',
+      '#.................#',
+      '#.##.#.#####.#.##.#',
+      '#....#...#...#....#',
+      '####.##..#..##.####',
+      '####.#.......#.####',
+      '####.#.##-##.#.####',
+      '    ...#   #...    ',
+      '####.#.#####.#.####',
+      '####.#.......#.####',
+      '####.#.#####.#.####',
+      '#........#........#',
+      '#.##.###.#.###.##.#',
+      '#o.#...........#.o#',
+      '##.#.#.#####.#.#.##',
+      '#....#...#...#....#',
+      '#.######.#.######.#',
+      '#.................#',
+      '###################',
+    ];
+    const ROWS = MAP.length, COLS = MAP[0].length, T = 20;
+    const W = COLS * T, H = ROWS * T;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    cv.width = W * dpr; cv.height = H * dpr;
+    cv.style.width = Math.min(W, window.innerWidth - 32) + 'px';
+    cv.style.height = (Math.min(W, window.innerWidth - 32) * H / W) + 'px';
+    ctx.scale(dpr, dpr);
+
+    const GHOSTS_CFG = [
+      { color: '#ff4d4d', sx: 9, sy: 7, release: 0 },
+      { color: '#ff9ff3', sx: 8, sy: 9, release: 2 },
+      { color: '#48dbfb', sx: 9, sy: 9, release: 5 },
+      { color: '#feca57', sx: 10, sy: 9, release: 8 },
+    ];
+    let dots, power, pac, ghosts, score, lives, level, frightT, comboN, running, dead, raf, last, elapsed;
+    let best = parseInt(localStorage.getItem(BEST_KEY) || '0', 10) || 0;
+    elBest.textContent = best;
+
+    function wallAt(c, r) {
+      if (r < 0 || r >= ROWS) return true;
+      if (c < 0 || c >= COLS) return r !== 9;
+      return MAP[r][c] === '#';
+ }
+    function canGo(c, r, g) {
+      if (r < 0 || r >= ROWS) return false;
+      if (c < 0 || c >= COLS) return r === 9;
+      const ch = MAP[r][c];
+      if (ch === '#') return false;
+      if (ch === '-') return !!g;
+      return true;
+ }
+
+    function resetPositions() {
+      pac = { x: 9 * T + T / 2, y: 15 * T + T / 2, dir: { x: 0, y: 0 }, next: { x: 0, y: 0 }, speed: 84, mouth: 0 };
+      ghosts = GHOSTS_CFG.map((g, i) => ({
+        x: g.sx * T + T / 2, y: g.sy * T + T / 2, dir: { x: 0, y: -1 }, color: g.color,
+        speed: 66 + level * 4, state: 'normal', inHouse: g.sy === 9, release: g.release, ghost: true, id: i,
+      }));
+      frightT = 0; comboN = 0; elapsed = 0;
+ }
+
+    function resetBoard() {
+      dots = new Set(); power = new Set();
+      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+        if (MAP[r][c] === '.') dots.add(r * COLS + c);
+        if (MAP[r][c] === 'o') power.add(r * COLS + c);
+ }
+    }
+
+    function newGame() {
+      score = 0; lives = 3; level = 1;
+      elScore.textContent = 0; elLives.textContent = 3; elLevel.textContent = 1;
+      resetBoard(); resetPositions();
+ }
+
+    function tileC(e) { return Math.floor(e.x / T); }
+    function tileR(e) { return Math.floor(e.y / T); }
+
+    function moveEntity(e, dt, decide) {
+      let dist = e.speed * dt;
+      if (!e.dir.x && !e.dir.y) {
+        const c = tileC(e), r = tileR(e);
+        decide(e, c, r);
+        if (!canGo(c + e.dir.x, r + e.dir.y, e.ghost)) { e.dir = { x: 0, y: 0 }; return; }
+      }
+      let guard = 8;
+      while (dist > 0 && (e.dir.x || e.dir.y) && guard-- > 0) {
+        const c = tileC(e), r = tileR(e);
+        const cx = c * T + T / 2, cy = r * T + T / 2;
+        // 距行进方向上下一个决策点（格中心）的距离；已过本格中心则目标为下一格中心
+        let ahead = e.dir.x ? (cx - e.x) * e.dir.x : (cy - e.y) * e.dir.y;
+        if (ahead < -0.01) ahead += T;
+        if (ahead > 0.01) {
+          const m = Math.min(ahead, dist);
+          e.x += e.dir.x * m; e.y += e.dir.y * m;
+          dist -= m;
+          if (dist <= 0) break;
+ }
+        // 到达中心：决策后跨入下一格
+        e.x = cx; e.y = cy;
+        decide(e, c, r);
+        if (!canGo(c + e.dir.x, r + e.dir.y, e.ghost)) { e.dir = { x: 0, y: 0 }; break; }
+        const m2 = Math.min(T / 2 + 0.01, dist);
+        e.x += e.dir.x * m2; e.y += e.dir.y * m2;
+        dist -= m2;
+        if (e.x < -T / 2) e.x += W + T; else if (e.x > W + T / 2) e.x -= W + T;
+ }
+      if (e.x < -T / 2) e.x += W + T; else if (e.x > W + T / 2) e.x -= W + T;
+ }
+
+    function pacDecide(e, c, r) {
+      if ((e.next.x || e.next.y) && canGo(c + e.next.x, r + e.next.y, false)) e.dir = { x: e.next.x, y: e.next.y };
+ }
+
+    function ghostDecide(g, c, r) {
+      if (g.inHouse) {
+        if (elapsed < g.release) { g.dir = { x: 0, y: 0 }; return; }
+        // 出屋：先到门列再向上
+        if (c !== 9) { g.dir = { x: c < 9 ? 1 : -1, y: 0 }; return; }
+        g.dir = { x: 0, y: -1 };
+        if (r <= 7) g.inHouse = false;
+        return;
+ }
+      let tx, ty;
+      if (g.state === 'eyes') { tx = 9; ty = 9; }
+      else {
+        const offs = [[0, 0], [2, 2], [-2, -2], [3, -3]][g.id];
+        tx = tileC(pac) + offs[0]; ty = tileR(pac) + offs[1];
+ }
+      const opts = [];
+      const dirs = [{ x: 0, y: -1 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 1, y: 0 }];
+      for (const d of dirs) {
+        if (d.x === -g.dir.x && d.y === -g.dir.y && (g.dir.x || g.dir.y)) continue;
+        if (!canGo(c + d.x, r + d.y, g.state === 'eyes')) continue;
+        opts.push(d);
+ }
+      if (!opts.length) { g.dir = { x: -g.dir.x, y: -g.dir.y }; return; }
+      if (g.state === 'fright') { g.dir = opts[Math.floor(Math.random() * opts.length)]; return; }
+      let bd = Infinity, pick = opts[0];
+      for (const d of opts) {
+        const dd = (c + d.x - tx) * (c + d.x - tx) + (r + d.y - ty) * (r + d.y - ty);
+        if (dd < bd) { bd = dd; pick = d; }
+      }
+      g.dir = pick;
+      // 眼睛回到屋内复活
+      if (g.state === 'eyes' && c === 9 && r === 9) { g.state = 'normal'; g.inHouse = true; }
+    }
+
+    function addScore(n) {
+      score += n;
+      elScore.textContent = score;
+      if (score > best) { best = score; localStorage.setItem(BEST_KEY, String(best)); elBest.textContent = best; }
+    }
+
+    function update(dt) {
+      elapsed += dt;
+      if (frightT > 0) { frightT -= dt; if (frightT <= 0) { comboN = 0; ghosts.forEach(g => { if (g.state === 'fright') g.state = 'normal'; }); } }
+      pac.mouth += dt * 10;
+      moveEntity(pac, dt, pacDecide);
+      const idx = tileR(pac) * COLS + tileC(pac);
+      if (dots.has(idx)) { dots.delete(idx); addScore(10); }
+      if (power.has(idx)) {
+        power.delete(idx); addScore(50); frightT = 6; comboN = 0;
+        ghosts.forEach(g => { if (g.state === 'normal' && !g.inHouse) g.state = 'fright'; });
+ }
+      for (const g of ghosts) {
+        g.speed = (g.state === 'eyes' ? 150 : g.state === 'fright' ? 48 : 66 + level * 4);
+        moveEntity(g, dt, ghostDecide);
+        const dx = g.x - pac.x, dy = g.y - pac.y;
+        if (dx * dx + dy * dy < (T * 0.7) * (T * 0.7)) {
+          if (g.state === 'fright') { comboN++; addScore(200 * comboN); g.state = 'eyes'; }
+          else if (g.state === 'normal') { loseLife(); return; }
+        }
+      }
+      if (!dots.size && !power.size) {
+        level++; elLevel.textContent = level;
+        resetBoard(); resetPositions();
+ }
+    }
+
+    function loseLife() {
+      lives--; elLives.textContent = lives;
+      if (lives <= 0) { gameOver(); return; }
+      resetPositions();
+ }
+
+    function gameOver() {
+      running = false; dead = true;
+      cancelAnimationFrame(raf);
+      ovTitle.textContent = '👻';
+      ovText.textContent = ("Game Over Score") + score;
+      document.getElementById('pm-start').textContent = "Play Again";
+      overlay.classList.remove('hidden');
+ }
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+      ctx.strokeStyle = '#2440a8'; ctx.lineWidth = 2;
+      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+        const ch = MAP[r][c];
+        if (ch === '#') { ctx.strokeStyle = '#2440a8'; ctx.strokeRect(c * T + 3, r * T + 3, T - 6, T - 6); }
+        else if (ch === '-') { ctx.strokeStyle = '#e569a8'; ctx.beginPath(); ctx.moveTo(c * T + 2, r * T + T / 2); ctx.lineTo(c * T + T - 2, r * T + T / 2); ctx.stroke(); }
+      }
+      ctx.fillStyle = '#ffd8a8';
+      dots.forEach(i => { const r = Math.floor(i / COLS), c = i % COLS; ctx.beginPath(); ctx.arc(c * T + T / 2, r * T + T / 2, 2.2, 0, 7); ctx.fill(); });
+      const blink = Math.floor(Date.now() / 250) % 2;
+      if (blink) {
+        power.forEach(i => { const r = Math.floor(i / COLS), c = i % COLS; ctx.beginPath(); ctx.arc(c * T + T / 2, r * T + T / 2, 6, 0, 7); ctx.fill(); });
+ }
+      // 吃豆人
+      const ang = Math.abs(Math.sin(pac.mouth)) * 0.9 + 0.05;
+      let rot = 0;
+      if (pac.dir.x === -1) rot = Math.PI; else if (pac.dir.y === -1) rot = -Math.PI / 2; else if (pac.dir.y === 1) rot = Math.PI / 2;
+      ctx.save(); ctx.translate(pac.x, pac.y); ctx.rotate(rot);
+      ctx.fillStyle = '#ffe066';
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, T / 2 - 1, ang, Math.PI * 2 - ang); ctx.closePath(); ctx.fill();
+      ctx.restore();
+      // 幽灵
+      for (const g of ghosts) {
+        const fr = g.state === 'fright';
+        const eyes = g.state === 'eyes';
+        if (!eyes) {
+          ctx.fillStyle = fr ? (frightT < 2 && blink ? '#eee' : '#3b5bdb') : g.color;
+          ctx.beginPath();
+          ctx.arc(g.x, g.y - 1, T / 2 - 2, Math.PI, 0);
+          ctx.lineTo(g.x + T / 2 - 2, g.y + T / 2 - 2);
+          for (let k = 2; k >= -2; k--) ctx.lineTo(g.x + k * (T / 2 - 2) / 2.5, g.y + T / 2 - 2 - (Math.abs(k) % 2 ? 3 : 0));
+          ctx.closePath(); ctx.fill();
+ }
+        ctx.fillStyle = '#fff';
+        ctx.beginPath(); ctx.arc(g.x - 3.5, g.y - 3, 3, 0, 7); ctx.arc(g.x + 3.5, g.y - 3, 3, 0, 7); ctx.fill();
+        ctx.fillStyle = '#223';
+        ctx.beginPath(); ctx.arc(g.x - 3.5 + g.dir.x * 1.4, g.y - 3 + g.dir.y * 1.4, 1.5, 0, 7); ctx.arc(g.x + 3.5 + g.dir.x * 1.4, g.y - 3 + g.dir.y * 1.4, 1.5, 0, 7); ctx.fill();
+ }
+    }
+
+    function loop(t) {
+      if (!running) return;
+      const dt = Math.min((t - last) / 1000, 0.05);
+      last = t;
+      update(dt);
+      draw();
+      raf = requestAnimationFrame(loop);
+ }
+
+    function start() {
+      newGame();
+      dead = false; running = true;
+      overlay.classList.add('hidden');
+      cv.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      last = performance.now();
+      raf = requestAnimationFrame(loop);
+ }
+
+    document.getElementById('pm-start').addEventListener('click', start);
+
+    const KEYS = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0], w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0] };
+    document.addEventListener('keydown', e => {
+      const k = KEYS[e.key] || KEYS[e.key.toLowerCase()];
+      if (!k || !running) return;
+      e.preventDefault();
+      pac.next = { x: k[0], y: k[1] };
+      if (!pac.dir.x && !pac.dir.y && canGo(tileC(pac) + k[0], tileR(pac) + k[1], false)) pac.dir = { x: k[0], y: k[1] };
+ });
+    let tsx = 0, tsy = 0;
+    cv.addEventListener('touchstart', e => { tsx = e.touches[0].clientX; tsy = e.touches[0].clientY; }, { passive: true });
+    cv.addEventListener('touchend', e => {
+      const dx = e.changedTouches[0].clientX - tsx, dy = e.changedTouches[0].clientY - tsy;
+      if (Math.abs(dx) < 16 && Math.abs(dy) < 16) return;
+      const k = Math.abs(dx) > Math.abs(dy) ? [dx > 0 ? 1 : -1, 0] : [0, dy > 0 ? 1 : -1];
+      if (running) {
+        pac.next = { x: k[0], y: k[1] };
+        if (!pac.dir.x && !pac.dir.y && canGo(tileC(pac) + k[0], tileR(pac) + k[1], false)) pac.dir = { x: k[0], y: k[1] };
+ }
+    }, { passive: true });
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && running) { running = false; cancelAnimationFrame(raf); }
+      else if (!document.hidden && !running && !dead && overlay.classList.contains('hidden')) {
+        running = true; last = performance.now(); raf = requestAnimationFrame(loop);
+ }
+    });
+
+    ovText.textContent = "Eat all the dots, watch out for ghosts!";
+    newGame();
+    draw();
+ })();
+</script>
+<script>(function(){var r=document.querySelector('.pm-wrap');if(r)r.classList.add('is-fs');})();</script>
+</body>
+</html>
